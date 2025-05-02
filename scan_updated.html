@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Bruce Mole's Barcode Parser</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 1rem; }
+    h1 { color: #333; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #aaa; padding: 8px; text-align: left; }
+    th { background-color: #f2f2f2; }
+    input[type="text"] { width: 100%; padding: 8px; margin-top: 4px; font-size: 1rem; }
+    button { margin-top: 1rem; padding: 8px 12px; font-size: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Bruce Mole's Barcode Parser</h1>
+
+  <!-- Form for barcode input -->
+  <form id="barcode-form">
+    <label for="barcode-input">Scan or Enter Barcode:</label>
+    <input type="text" id="barcode-input" autocomplete="off" autofocus>
+  </form>
+
+  <!-- Table for displaying parsed fields -->
+  <!-- Displayed columns: GTIN (01), Expiration Date (17), Batch/Lot (10), Serial Number (21), Other Fields, Comments -->
+  <table id="barcode-table">
+    <thead>
+      <tr>
+        <th>GTIN (01)</th>
+        <th>Expiration Date (17)</th>
+        <th>Batch/Lot (10)</th>
+        <th>Serial Number (21)</th>
+        <th>Other Fields</th>
+        <th>Comments</th>
+      </tr>
+    </thead>
+    <tbody>
+      <!-- Parsed rows will appear here -->
+    </tbody>
+  </table>
+
+  <!-- Button to copy the table contents to the clipboard -->
+  <button id="copy-to-clipboard">Copy Table to Clipboard</button>
+
+  <script>
+    // --- Expanded GS1 AI Rules ---
+    // Each rule is defined by its "min" and "max" properties.
+    // If min equals max then the field is fixed-length; otherwise, it is variable-length.
+    const aiRules = {
+      // Serial Shipping Container Code and GTINs
+      "00": { min: 18, max: 18, description: "SSCC" },
+      "01": { min: 14, max: 14, description: "GTIN" },
+      "02": { min: 14, max: 14, description: "GTIN of contained trade items" },
+      
+      // Dates
+      "11": { min: 6, max: 6, description: "Production Date (YYMMDD)" },
+      "12": { min: 6, max: 6, description: "Due Date (YYMMDD)" },
+      "13": { min: 6, max: 6, description: "Packaging Date (YYMMDD)" },
+      "15": { min: 6, max: 6, description: "Best Before Date (YYMMDD)" },
+      "17": { min: 6, max: 6, description: "Expiration Date (YYMMDD)" },
+      
+      // Other fixed-length numeric fields
+      "20": { min: 2, max: 2, description: "Variant" },
+      
+      // Variable-length text/numeric fields
+      "10": { min: 1, max: 20, description: "Batch or Lot Number" },
+      "21": { min: 1, max: 30, description: "Serial Number" },
+      "30": { min: 1, max: 8,  description: "Count" },
+      
+      // Additional Product Identifiers
+      "240": { min: 1, max: 30, description: "Additional Product Identification" },
+      "241": { min: 1, max: 30, description: "Customer Part Number" },
+      "242": { min: 1, max: 6,  description: "Made-to-order Variation Number" },
+      "250": { min: 1, max: 30, description: "Secondary Serial Number" },
+      "251": { min: 1, max: 30, description: "Additional Secondary Serial Number" },
+      
+      // Weight Fields (Net Weight in kg)
+      "3100": { min: 6, max: 6, description: "Net weight (kg) with 0 decimal places" },
+      "3101": { min: 6, max: 6, description: "Net weight (kg) with 1 decimal place" },
+      "3102": { min: 6, max: 6, description: "Net weight (kg) with 2 decimal places" },
+      "3103": { min: 6, max: 6, description: "Net weight (kg) with 3 decimal places" },
+      "3104": { min: 6, max: 6, description: "Net weight (kg) with 4 decimal places" },
+      "3105": { min: 6, max: 6, description: "Net weight (kg) with 5 decimal places" },
+      "3106": { min: 6, max: 6, description: "Net weight (kg) with 6 decimal places" },
+      "3107": { min: 6, max: 6, description: "Net weight (kg) with 7 decimal places" },
+      "3108": { min: 6, max: 6, description: "Net weight (kg) with 8 decimal places" },
+      "3109": { min: 6, max: 6, description: "Net weight (kg) with 9 decimal places" },
+      
+      // Weight Fields (Net Weight in lb)
+      "3200": { min: 6, max: 6, description: "Net weight (lb) with 0 decimal places" },
+      "3201": { min: 6, max: 6, description: "Net weight (lb) with 1 decimal place" },
+      "3202": { min: 6, max: 6, description: "Net weight (lb) with 2 decimal places" },
+      "3203": { min: 6, max: 6, description: "Net weight (lb) with 3 decimal places" },
+      "3204": { min: 6, max: 6, description: "Net weight (lb) with 4 decimal places" },
+      "3205": { min: 6, max: 6, description: "Net weight (lb) with 5 decimal places" },
+      "3206": { min: 6, max: 6, description: "Net weight (lb) with 6 decimal places" },
+      "3207": { min: 6, max: 6, description: "Net weight (lb) with 7 decimal places" },
+      "3208": { min: 6, max: 6, description: "Net weight (lb) with 8 decimal places" },
+      "3209": { min: 6, max: 6, description: "Net weight (lb) with 9 decimal places" },
+      
+      // Monetary Amounts (Prices, with VAT exclusion/inclusion)
+      "3930": { min: 15, max: 15, description: "Price, ex VAT, numeric, 0 decimal places" },
+      "3931": { min: 15, max: 15, description: "Price, ex VAT, numeric, 1 decimal place" },
+      "3932": { min: 15, max: 15, description: "Price, ex VAT, numeric, 2 decimal places" },
+      "3933": { min: 15, max: 15, description: "Price, ex VAT, numeric, 3 decimal places" },
+      "3934": { min: 15, max: 15, description: "Price, ex VAT, numeric, 4 decimal places" },
+      "3935": { min: 15, max: 15, description: "Price, ex VAT, numeric, 5 decimal places" },
+      "3936": { min: 15, max: 15, description: "Price, ex VAT, numeric, 6 decimal places" },
+      "3937": { min: 15, max: 15, description: "Price, ex VAT, numeric, 7 decimal places" },
+      "3938": { min: 15, max: 15, description: "Price, ex VAT, numeric, 8 decimal places" },
+      "3939": { min: 15, max: 15, description: "Price, ex VAT, numeric, 9 decimal places" },
+      "3940": { min: 15, max: 15, description: "Price, inc VAT, numeric, 0 decimal places" },
+      "3941": { min: 15, max: 15, description: "Price, inc VAT, numeric, 1 decimal place" },
+      "3942": { min: 15, max: 15, description: "Price, inc VAT, numeric, 2 decimal places" },
+      "3943": { min: 15, max: 15, description: "Price, inc VAT, numeric, 3 decimal places" },
+      "3944": { min: 15, max: 15, description: "Price, inc VAT, numeric, 4 decimal places" },
+      "3945": { min: 15, max: 15, description: "Price, inc VAT, numeric, 5 decimal places" },
+      "3946": { min: 15, max: 15, description: "Price, inc VAT, numeric, 6 decimal places" },
+      "3947": { min: 15, max: 15, description: "Price, inc VAT, numeric, 7 decimal places" },
+      "3948": { min: 15, max: 15, description: "Price, inc VAT, numeric, 8 decimal places" },
+      "3949": { min: 15, max: 15, description: "Price, inc VAT, numeric, 9 decimal places" },
+      
+      // Percentage Discounts
+      "3950": { min: 15, max: 15, description: "Percentage discount, 0 decimal places" },
+      "3951": { min: 15, max: 15, description: "Percentage discount, 1 decimal place" },
+      "3952": { min: 15, max: 15, description: "Percentage discount, 2 decimal places" },
+      "3953": { min: 15, max: 15, description: "Percentage discount, 3 decimal places" },
+      
+      // Location Identifiers (GLN, postal codes, etc.)
+      "8002": { min: 14, max: 14, description: "GLN of the shipping address" },
+      "8003": { min: 14, max: 14, description: "GLN of the physical location" },
+      "8004": { min: 1,  max: 25, description: "Ship to, postal code" },
+      "8005": { min: 1,  max: 30, description: "Ship to, country code" },
+      "8006": { min: 14, max: 14, description: "GLN of the buyer" },
+      "8007": { min: 14, max: 14, description: "GLN of the seller" },
+      "8008": { min: 1,  max: 30, description: "Customs value" }
+      
+      // Additional AIs can be added here.
+    };
+
+    // Group Separator (ASCII 29)
+    const GS = String.fromCharCode(29);
+
+    // --- Helper Function: Dynamically Detect an AI Code ---
+    function getNextAI(input, startPos, rules) {
+      let pos = startPos;
+      let codeBuffer = "";
+      let foundAI = null;
+      while (pos < input.length) {
+        codeBuffer += input[pos];
+        pos++;
+        if (rules.hasOwnProperty(codeBuffer)) {
+          foundAI = codeBuffer;
+          break;
+        }
+      }
+      return { foundAI, pos };
+    }
+
+    // --- State Machine: Parse the Barcode ---
+    function parseBarcode(input, rules) {
+      let pos = 0;
+      const result = {};
+      const errors = [];
+      
+      while (pos < input.length) {
+        const { foundAI, pos: newPos } = getNextAI(input, pos, rules);
+        if (!foundAI) {
+          errors.push("Unknown AI code encountered at position " + pos);
+          break;
+        }
+        pos = newPos;
+        const rule = rules[foundAI];
+        let dataField = "";
+        if (rule.min === rule.max) {
+          dataField = input.substr(pos, rule.min);
+          pos += rule.min;
+          if (dataField.length > rule.max) {
+            dataField = dataField.substring(0, rule.max);
+            console.warn(`Data for AI ${foundAI} truncated to maximum length of ${rule.max}`);
+          }
+        } else {
+          let nextGS = input.indexOf(GS, pos);
+          if (nextGS === -1) {
+            dataField = input.substr(pos);
+            pos = input.length;
+          } else {
+            dataField = input.substring(pos, nextGS);
+            pos = nextGS + 1;
+          }
+          if (dataField.length > rule.max) {
+            dataField = dataField.substring(0, rule.max);
+            console.warn(`Data for AI ${foundAI} truncated to maximum length of ${rule.max}`);
+          }
+          if (dataField.length < rule.min) {
+            console.warn(`Data for AI ${foundAI} is shorter than the minimum expected length of ${rule.min}`);
+          }
+        }
+        result[foundAI] = dataField;
+      }
+      return { data: result, errors: errors };
+    }
+
+    // --- Insert Group Separator on AltLeft keypress ---
+    const barcodeInput = document.getElementById("barcode-input");
+    barcodeInput.addEventListener("keydown", function(e) {
+      if (e.code === "AltLeft") {
+        this.value += GS;
+        e.preventDefault();
+      }
+    });
+
+    // --- Ensure the Scan Field Stays in Focus ---
+    // If the scan field loses focus, immediately refocus it.
+    barcodeInput.addEventListener("blur", function() {
+      this.focus();
+    });
+
+    // --- Handle Form Submission ---
+    document.getElementById("barcode-form").addEventListener("submit", function(e) {
+      e.preventDefault();
+      const inputField = document.getElementById("barcode-input");
+      const barcodeValue = inputField.value.trim();
+      if (!barcodeValue) return;
+      
+      const parsed = parseBarcode(barcodeValue, aiRules);
+      console.log("Parsed Data:", parsed.data, "Errors:", parsed.errors);
+      
+      const tbody = document.getElementById("barcode-table").querySelector("tbody");
+      const newRow = document.createElement("tr");
+      
+      // Display order for main columns.
+      const displayOrder = ["01", "17", "10", "21"];
+      displayOrder.forEach(ai => {
+        const cell = document.createElement("td");
+        cell.textContent = parsed.data[ai] || "";
+        newRow.appendChild(cell);
+      });
+      
+      // Build the "Other Fields" column using extra fields (using their description).
+      let otherText = "";
+      const extraFields = [];
+      for (const key in parsed.data) {
+        if (!displayOrder.includes(key)) {
+          const desc = aiRules[key]?.description || key;
+          extraFields.push(`${desc} (${parsed.data[key]})`);
+        }
+      }
+      if (extraFields.length > 0) {
+        otherText = extraFields.join(", ");
+      }
+      const otherCell = document.createElement("td");
+      otherCell.textContent = otherText;
+      newRow.appendChild(otherCell);
+      
+      // Build the Comments column from errors.
+      let comments = "";
+      if (parsed.errors.length > 0) {
+        comments = parsed.errors.join("; ");
+      }
+      const commentCell = document.createElement("td");
+      commentCell.textContent = comments;
+      newRow.appendChild(commentCell);
+      
+      tbody.appendChild(newRow);
+      
+      inputField.value = "";
+      inputField.focus();
+    });
+
+    // --- Copy Table to Clipboard ---
+    document.getElementById("copy-to-clipboard").addEventListener("click", function() {
+      const table = document.getElementById("barcode-table");
+      let clipboardText = "";
+      for (let i = 0; i < table.rows.length; i++) {
+        let rowText = [];
+        for (let j = 0; j < table.rows[i].cells.length; j++) {
+          rowText.push(table.rows[i].cells[j].innerText);
+        }
+        clipboardText += rowText.join("\t") + "\n";
+      }
+      navigator.clipboard.writeText(clipboardText)
+        .then(() => {
+          alert("Table copied to clipboard!");
+        })
+        .catch(err => {
+          console.error("Error copying table: ", err);
+        });
+    });
+  </script>
+</body>
+</html>
